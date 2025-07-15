@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stream Frontend</title>
+
+    <!-- 1️⃣ Tailwind Play CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 2️⃣ Your custom Tailwind config -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: {
+                light: '#5EEAD4',
+                DEFAULT: '#14B8A6',
+                dark: '#0D9488',
+              },
+              accent: {
+                light: '#FBBF24',
+                DEFAULT: '#F59E0B',
+                dark: '#B45309',
+              },
+            },
+          },
+        },
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
