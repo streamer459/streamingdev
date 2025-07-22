@@ -50,7 +50,62 @@ export default function Home() {
     // }
 
     // TODO: Replace with actual API calls
-    const mockStreams: Stream[] = [];
+    const mockStreams: Stream[] = [
+      {
+        id: '1',
+        title: 'Epic Gaming Session - Road to Rank 1!',
+        streamer: 'ProGamer_2024',
+        thumbnailUrl: 'https://picsum.photos/400/300?random=1',
+        viewerCount: 2847,
+        category: 'games',
+        isLive: true,
+      },
+      {
+        id: '2',
+        title: 'Building a React App from Scratch',
+        streamer: 'CodeMaster_Dev',
+        thumbnailUrl: 'https://picsum.photos/400/300?random=2',
+        viewerCount: 1523,
+        category: 'software-development',
+        isLive: true,
+      },
+      {
+        id: '3',
+        title: 'Cooking Italian Pasta Tonight!',
+        streamer: 'ChefAnna',
+        thumbnailUrl: 'https://picsum.photos/400/300?random=3',
+        viewerCount: 892,
+        category: 'cooking',
+        isLive: true,
+      },
+      {
+        id: '4',
+        title: 'Just Chatting and Q&A Session',
+        streamer: 'TalkShow_Host',
+        thumbnailUrl: 'https://picsum.photos/400/300?random=4',
+        viewerCount: 645,
+        category: 'just-chatting',
+        isLive: true,
+      },
+      {
+        id: '5',
+        title: 'Virtual Concert Live Stream',
+        streamer: 'MusicStream',
+        thumbnailUrl: 'https://picsum.photos/400/300?random=5',
+        viewerCount: 3421,
+        category: 'events',
+        isLive: true,
+      },
+      {
+        id: '6',
+        title: 'Morning Walk in the City',
+        streamer: 'CityExplorer',
+        thumbnailUrl: 'https://picsum.photos/400/300?random=6',
+        viewerCount: 234,
+        category: 'irl',
+        isLive: true,
+      },
+    ];
     setStreams(mockStreams);
   }, [loading, activeTab]); // Removed user and navigate dependencies
 
