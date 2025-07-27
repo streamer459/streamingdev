@@ -1,4 +1,5 @@
 import 'video.js/dist/video-js.css'; // 📺 Video.js default styles
+import './video-player.css'; // 🎮 Custom Video.js controls styling
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';

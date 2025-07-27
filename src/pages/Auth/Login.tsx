@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import { useContext, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import Input from '../../components/Input';
@@ -15,6 +15,7 @@ type LoginFormValues = {
 export default function Login() {
   const { login } = useContext(AuthContext);
   const { isDarkMode } = useDarkMode();
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const {
     register,
@@ -23,12 +24,12 @@ export default function Login() {
   } = useForm<LoginFormValues>();
 
   const onSubmit = async (data: LoginFormValues) => {
+    setApiError(null);
     try {
       await login(data.email, data.password, data.remember);
-      // after successful login, AuthContext.login() navigates to /home
     } catch (err) {
-      // Handle API errors (e.g., wrong credentials)
       console.error('Login failed', err);
+      setApiError(err instanceof Error ? err.message : 'Login failed');
     }
   };
 
@@ -46,6 +47,11 @@ export default function Login() {
         }`}>
           Log In to Your Account
         </h2>
+        {apiError && (
+          <div className="mb-4 p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md dark:bg-red-900/20 dark:border-red-800">
+            {apiError}
+          </div>
+        )}
         <form onSubmit={handleSubmit(onSubmit)}>
           <Input
             label="Email"

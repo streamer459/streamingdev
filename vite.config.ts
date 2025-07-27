@@ -7,11 +7,16 @@ export default defineConfig({
   plugins: [
     react(),
   ],
+  server: {
+    host: '0.0.0.0', // Allow external access
+    port: 8080,      // Use port 8080 instead of 5173
+    allowedHosts: ['frontend-01.homelab.com', 'localhost', '127.0.0.1'],
+  },
   css: {
     postcss: {
       plugins: [
-        // Explicitly wire in the Tailwind CSS PostCSS plugin with your config
-        tailwind({ config: './tailwind.config.cjs' }),
+        // Explicitly wire in the Tailwind CSS PostCSS plugin
+        tailwind(),
         autoprefixer(),
       ],
     },

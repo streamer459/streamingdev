@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import { useContext, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from 'react-router-dom';
@@ -37,6 +37,7 @@ type SignupFormValues = z.infer<typeof SignupSchema>;
 export default function Signup() {
   const { signup } = useContext(AuthContext);
   const { isDarkMode } = useDarkMode();
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const {
     register,
@@ -48,11 +49,12 @@ export default function Signup() {
   });
 
   const onSubmit = async (data: SignupFormValues) => {
+    setApiError(null);
     try {
       await signup(data.username, data.email, data.password);
-      // AuthContext.signup() already navigates to /login after stubbed success
     } catch (err) {
       console.error('Signup failed', err);
+      setApiError(err instanceof Error ? err.message : 'Signup failed');
     }
   };
 
@@ -70,6 +72,11 @@ export default function Signup() {
         }`}>
           Create an Account
         </h2>
+        {apiError && (
+          <div className="mb-4 p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md dark:bg-red-900/20 dark:border-red-800">
+            {apiError}
+          </div>
+        )}
         <form onSubmit={handleSubmit(onSubmit)}>
           <Input
             label="Username"

@@ -1,0 +1,319 @@
+/* Custom Video.js styling to ensure controls are visible and functional */
+
+/* Control bar - hidden by default, show on hover */
+.video-js .vjs-control-bar {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 0 !important;
+  background: rgba(0, 0, 0, 0.7) !important;
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  z-index: 2 !important;
+  height: 30px !important;
+  pointer-events: auto !important;
+  align-items: center !important;
+  transition: opacity 0.3s ease !important;
+}
+
+/* Hide big play button for live streams */
+.video-js .vjs-big-play-button {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+/* Hide big play button when playing */
+.video-js.vjs-playing .vjs-big-play-button,
+.video-js.vjs-has-started .vjs-big-play-button {
+  display: none !important;
+  opacity: 0 !important;
+}
+
+/* Show controls on hover only */
+.video-js:hover .vjs-control-bar {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: translateY(0) !important;
+}
+
+/* Also show controls when user is actively interacting */
+.video-js.vjs-user-active .vjs-control-bar {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: translateY(0) !important;
+}
+
+/* Hide unwanted buttons for live streams */
+.video-js .vjs-playback-rates,
+.video-js .vjs-playback-rates-menu,
+.video-js .vjs-chapters-button,
+.video-js .vjs-descriptions-button,
+.video-js .vjs-audio-button,
+.video-js .vjs-audio-track-button,
+.video-js .vjs-subs-caps-button,
+.video-js .vjs-captions-button,
+.video-js .vjs-subtitles-button,
+.video-js .vjs-text-track-display,
+.video-js .vjs-menu-button,
+.video-js .vjs-menu-button-popup,
+.video-js .vjs-playback-rate,
+.video-js .vjs-picture-in-picture-control {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Make sure all control buttons are visible and clickable with consistent styling */
+.video-js .vjs-control-bar .vjs-button {
+  color: white !important;
+  pointer-events: auto !important;
+  opacity: 1 !important;
+  height: 30px !important;
+  line-height: 30px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  vertical-align: top !important;
+  max-height: 30px !important;
+  min-height: 30px !important;
+  box-sizing: border-box !important;
+}
+
+.video-js .vjs-control-bar .vjs-button:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.video-js .vjs-control-bar .vjs-button:focus {
+  background-color: rgba(255, 255, 255, 0.2) !important;
+  outline: none !important;
+}
+
+.video-js .vjs-progress-control {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.video-js .vjs-volume-panel {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.video-js .vjs-play-control {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* Live streams follow same hover behavior */
+.video-js.vjs-live .vjs-control-bar {
+  display: flex !important;
+  opacity: 0 !important;
+  visibility: visible !important;
+  transition: opacity 0.3s ease !important;
+}
+
+.video-js.vjs-live:hover .vjs-control-bar {
+  opacity: 1 !important;
+}
+
+/* Fix any potential overlay issues */
+.video-js {
+  position: relative !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.video-js .vjs-tech {
+  pointer-events: none !important;
+}
+
+.video-js .vjs-control-bar,
+.video-js .vjs-big-play-button {
+  pointer-events: auto !important;
+}
+
+/* Custom theater mode button styling to match other buttons */
+.video-js .vjs-theater-button {
+  cursor: pointer !important;
+  color: white !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 30px !important;
+  height: 30px !important;
+  font-size: 1.0em !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  vertical-align: top !important;
+}
+
+.video-js .vjs-theater-button:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.video-js .vjs-theater-button .vjs-icon-placeholder {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.video-js .vjs-theater-button .vjs-control-text {
+  position: absolute !important;
+  left: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+}
+
+/* Ensure video.js player adapts to container changes */
+.video-js .vjs-tech {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+
+/* Theater mode specific adjustments */
+.video-js.vjs-fluid {
+  padding-top: 0 !important;
+}
+
+/* Ensure video container fills available space */
+[data-vjs-player] {
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+}
+
+/* Specific button sizing for consistency */
+.video-js .vjs-play-control,
+.video-js .vjs-mute-control {
+  width: 30px !important;
+  height: 30px !important;
+  font-size: 1.1em !important;
+}
+
+/* Fix fullscreen button size and positioning */
+.video-js .vjs-fullscreen-control {
+  width: 30px !important;
+  height: 30px !important;
+  font-size: 1.0em !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* Theater button sizing to match other buttons */
+.video-js .vjs-theater-button {
+  width: 30px !important;
+  height: 30px !important;
+  font-size: 1.0em !important;
+}
+
+/* Volume panel styling */
+.video-js .vjs-volume-panel {
+  height: 30px !important;
+  line-height: 30px !important;
+}
+
+.video-js .vjs-volume-control {
+  width: 5em !important;
+  height: 30px !important;
+}
+
+/* Progress control styling */
+.video-js .vjs-progress-control {
+  height: 30px !important;
+  line-height: 30px !important;
+}
+
+/* Time display styling */
+.video-js .vjs-current-time,
+.video-js .vjs-duration,
+.video-js .vjs-time-divider {
+  height: 30px !important;
+  line-height: 30px !important;
+  font-size: 11px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Prevent button icons from overflowing */
+.video-js .vjs-control-bar .vjs-button .vjs-icon-placeholder,
+.video-js .vjs-control-bar .vjs-button:before {
+  max-width: 28px !important;
+  max-height: 28px !important;
+  overflow: hidden !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* Ensure control bar never exceeds viewport */
+.video-js .vjs-control-bar {
+  max-height: 30px !important;
+  min-height: 30px !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+/* Video overlay buttons (follow/subscribe) */
+.video-overlay-buttons {
+  position: absolute !important;
+  top: 16px !important;
+  right: 16px !important;
+  z-index: 3 !important;
+  display: flex !important;
+  gap: 8px !important;
+  opacity: 0 !important;
+  transition: opacity 0.3s ease !important;
+  pointer-events: auto !important;
+}
+
+/* Show overlay buttons on video hover */
+.video-js:hover .video-overlay-buttons {
+  opacity: 1 !important;
+}
+
+/* Individual overlay button styling - matches existing buttons */
+.video-overlay-button {
+  border: none !important;
+  border-radius: 8px !important;
+  padding: 9px 18px !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  white-space: nowrap !important;
+  backdrop-filter: blur(4px) !important;
+  /* Default follow button styling (blue) */
+  background: rgba(37, 99, 235, 0.9) !important;
+  color: white !important;
+}
+
+.video-overlay-button:hover {
+  background: rgba(29, 78, 216, 0.95) !important;
+}
+
+/* Following state - gray styling */
+.video-overlay-button.following {
+  background: rgba(107, 114, 128, 0.9) !important;
+  color: white !important;
+}
+
+.video-overlay-button.following:hover {
+  background: rgba(75, 85, 99, 0.95) !important;
+}
+
+/* Subscribe button - deeper green */
+.video-overlay-button.subscribe {
+  background: rgba(34, 197, 94, 0.9) !important;
+  color: white !important;
+}
+
+.video-overlay-button.subscribe:hover {
+  background: rgba(22, 163, 74, 0.95) !important;
+}
