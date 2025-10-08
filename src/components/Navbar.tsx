@@ -2,13 +2,16 @@ import { useContext, useState, useRef, useEffect } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import AuthContext from '../contexts/AuthContext';
 import { useDarkMode } from '../contexts/DarkModeContext';
+import { getPublicUserProfile } from '../services/streamApi';
+import distortedLogo from '../assets/distorted_logo.png';
 
 export default function Navbar() {
-  const { user, logout } = useContext(AuthContext);
+  const { user, logout, updateUserProfile } = useContext(AuthContext);
   const { isDarkMode, toggleDarkMode } = useDarkMode();
   const navigate = useNavigate();
   const location = useLocation();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [freshProfilePicture, setFreshProfilePicture] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   
   // Check if we're on a stream page (pattern: /:username but not /u/:username)
@@ -34,6 +37,34 @@ export default function Navbar() {
     setIsDropdownOpen(false);
   };
 
+  // Fetch fresh profile picture when user changes
+  useEffect(() => {
+    const fetchFreshProfilePicture = async () => {
+      if (user?.username) {
+        try {
+          // Check if current profile picture contains old homelab.com domain and force refresh
+          const hasOldDomain = user.profilePicture?.includes('homelab.com');
+          
+          const profile = await getPublicUserProfile(user.username);
+          const freshProfilePicUrl = profile.profilePicture || null;
+          setFreshProfilePicture(freshProfilePicUrl);
+          
+          // Update AuthContext if we got a different profile picture URL OR if old URL had homelab.com
+          if (freshProfilePicUrl && (freshProfilePicUrl !== user.profilePicture || hasOldDomain)) {
+            updateUserProfile({ profilePicture: freshProfilePicUrl });
+          }
+        } catch (error) {
+          // If fetch fails, keep using the context profile picture
+          setFreshProfilePicture(null);
+        }
+      } else {
+        setFreshProfilePicture(null);
+      }
+    };
+
+    fetchFreshProfilePicture();
+  }, [user?.username, user?.profilePicture, updateUserProfile]);
+
   // Generate initials from username
   const getInitials = (username: string) => {
     return username
@@ -58,11 +89,79 @@ export default function Navbar() {
             <div className="flex-shrink-0">
               <NavLink
                 to="/home"
-                className={`font-semibold text-lg ${
-                  isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'
-                } transition-colors`}
+                className={({ isActive }) => `relative group ${isActive ? 'active-home-link' : ''}`}
+                onClick={(e) => {
+                  // If already on home page, prevent default and just trigger glitch effect
+                  if (location.pathname === '/home' || location.pathname === '/') {
+                    e.preventDefault();
+                  }
+                }}
               >
-                Distorted
+                <div className="relative overflow-hidden group-hover:animate-none">
+                  {/* Base logo - becomes ghostly on hover */}
+                  <img 
+                    src={distortedLogo} 
+                    alt="Distorted" 
+                    className="h-16 w-auto relative z-10 group-hover:opacity-40 transition-all duration-[3000ms] ease-out"
+                    style={{
+                      filter: 'brightness(1) contrast(1) saturate(1)',
+                    }}
+                  />
+                  
+                  {/* Data corruption layers - each with unique distortion */}
+                  <img 
+                    src={distortedLogo} 
+                    alt="" 
+                    className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-70 transition-all duration-[3000ms] ease-out corruption-layer-1"
+                    style={{
+                      filter: 'brightness(1.2) contrast(1.8) saturate(0.4) hue-rotate(240deg) sepia(0.2) drop-shadow(1px 0 0 rgba(0,200,255,0.4))',
+                      zIndex: 5,
+                    }}
+                  />
+                  <img 
+                    src={distortedLogo} 
+                    alt="" 
+                    className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-50 transition-all duration-[3000ms] ease-out corruption-layer-2"
+                    style={{
+                      filter: 'brightness(0.8) contrast(2.2) saturate(1.5) hue-rotate(320deg) blur(0.3px) drop-shadow(-1px 0 0 rgba(255,0,150,0.5))',
+                      zIndex: 4,
+                    }}
+                  />
+                  <img 
+                    src={distortedLogo} 
+                    alt="" 
+                    className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-60 transition-all duration-[3000ms] ease-out corruption-layer-3"
+                    style={{
+                      filter: 'brightness(1.5) contrast(1.4) saturate(0.8) hue-rotate(180deg) drop-shadow(2px 0 0 rgba(100,255,0,0.3))',
+                      zIndex: 3,
+                    }}
+                  />
+                  <img 
+                    src={distortedLogo} 
+                    alt="" 
+                    className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-40 transition-all duration-[3000ms] ease-out corruption-layer-4"
+                    style={{
+                      filter: 'brightness(0.5) contrast(3.5) saturate(0.2) hue-rotate(60deg) blur(0.8px) sepia(0.4) drop-shadow(0 0 2px rgba(255,255,0,0.3))',
+                      zIndex: 2,
+                    }}
+                  />
+                  <img 
+                    src={distortedLogo} 
+                    alt="" 
+                    className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-30 transition-all duration-[3000ms] ease-out corruption-layer-5"
+                    style={{
+                      filter: 'brightness(1.8) contrast(0.6) saturate(2.5) hue-rotate(0deg) drop-shadow(-2px 0 0 rgba(255,50,50,0.4))',
+                      zIndex: 1,
+                    }}
+                  />
+                </div>
+                <span 
+                  className={`font-semibold text-lg hidden ${
+                    isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'
+                  } transition-colors`}
+                >
+                  Distorted
+                </span>
               </NavLink>
             </div>
             
@@ -142,9 +241,9 @@ export default function Navbar() {
                       ? 'bg-black text-white'
                       : 'bg-black text-white'
                   }`}>
-                    {user.profilePicture ? (
+                    {(freshProfilePicture || user.profilePicture) ? (
                       <img 
-                        src={user.profilePicture} 
+                        src={freshProfilePicture || user.profilePicture} 
                         alt="Profile" 
                         className="w-8 h-8 rounded-full object-cover"
                       />
@@ -293,11 +392,79 @@ export default function Navbar() {
             {/* Distorted logo - far left */}
             <NavLink
               to="/home"
-              className={`font-semibold text-lg ${
-                isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'
-              } transition-colors`}
+              className={({ isActive }) => `relative group ${isActive ? 'active-home-link' : ''}`}
+              onClick={(e) => {
+                // If already on home page, prevent default and just trigger glitch effect
+                if (location.pathname === '/home' || location.pathname === '/') {
+                  e.preventDefault();
+                }
+              }}
             >
-              Distorted
+              <div className="relative overflow-hidden group-hover:animate-none">
+                {/* Base logo - becomes ghostly on hover */}
+                <img 
+                  src={distortedLogo} 
+                  alt="Distorted" 
+                  className="h-16 w-auto relative z-10 group-hover:opacity-40 transition-all duration-[3000ms] ease-out"
+                  style={{
+                    filter: 'brightness(1) contrast(1) saturate(1)',
+                  }}
+                />
+                
+                {/* Data corruption layers - each with unique distortion */}
+                <img 
+                  src={distortedLogo} 
+                  alt="" 
+                  className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-70 transition-all duration-[3000ms] ease-out corruption-layer-1"
+                  style={{
+                    filter: 'brightness(1.2) contrast(1.8) saturate(0.4) hue-rotate(240deg) sepia(0.2) drop-shadow(1px 0 0 rgba(0,200,255,0.4))',
+                    zIndex: 5,
+                  }}
+                />
+                <img 
+                  src={distortedLogo} 
+                  alt="" 
+                  className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-50 transition-all duration-[3000ms] ease-out corruption-layer-2"
+                  style={{
+                    filter: 'brightness(0.8) contrast(2.2) saturate(1.5) hue-rotate(320deg) blur(0.3px) drop-shadow(-1px 0 0 rgba(255,0,150,0.5))',
+                    zIndex: 4,
+                  }}
+                />
+                <img 
+                  src={distortedLogo} 
+                  alt="" 
+                  className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-60 transition-all duration-[3000ms] ease-out corruption-layer-3"
+                  style={{
+                    filter: 'brightness(1.5) contrast(1.4) saturate(0.8) hue-rotate(180deg) drop-shadow(2px 0 0 rgba(100,255,0,0.3))',
+                    zIndex: 3,
+                  }}
+                />
+                <img 
+                  src={distortedLogo} 
+                  alt="" 
+                  className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-40 transition-all duration-[3000ms] ease-out corruption-layer-4"
+                  style={{
+                    filter: 'brightness(0.5) contrast(3.5) saturate(0.2) hue-rotate(60deg) blur(0.8px) sepia(0.4) drop-shadow(0 0 2px rgba(255,255,0,0.3))',
+                    zIndex: 2,
+                  }}
+                />
+                <img 
+                  src={distortedLogo} 
+                  alt="" 
+                  className="absolute top-0 left-0 h-16 w-auto opacity-0 group-hover:opacity-30 transition-all duration-[3000ms] ease-out corruption-layer-5"
+                  style={{
+                    filter: 'brightness(1.8) contrast(0.6) saturate(2.5) hue-rotate(0deg) drop-shadow(-2px 0 0 rgba(255,50,50,0.4))',
+                    zIndex: 1,
+                  }}
+                />
+              </div>
+              <span 
+                className={`font-semibold text-lg hidden ${
+                  isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'
+                } transition-colors`}
+              >
+                Distorted
+              </span>
             </NavLink>
           </div>
           
@@ -342,9 +509,9 @@ export default function Navbar() {
                       ? 'bg-black text-white'
                       : 'bg-black text-white'
                   }`}>
-                    {user.profilePicture ? (
+                    {(freshProfilePicture || user.profilePicture) ? (
                       <img 
-                        src={user.profilePicture} 
+                        src={freshProfilePicture || user.profilePicture} 
                         alt="Profile" 
                         className="w-8 h-8 rounded-full object-cover"
                       />

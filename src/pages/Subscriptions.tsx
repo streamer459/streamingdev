@@ -90,10 +90,10 @@ export default function Subscriptions() {
       <div className="max-w-4xl mx-auto py-8 px-4">
         <div className="mb-8">
           <h1 className={`text-3xl font-bold mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-            My Subscriptions
+            Subscriptions
           </h1>
           <p className={`text-lg ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-            Manage your channel subscriptions
+            Manage your channel subscriptions and supporter benefits
           </p>
         </div>
 
@@ -122,16 +122,16 @@ export default function Subscriptions() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <h3 className={`text-lg font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                No Subscriptions Yet
+                No Active Subscriptions
               </h3>
               <p className={`mb-6 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                You haven't subscribed to any channels yet. Explore streamers and subscribe to support them!
+                You don't have any channel subscriptions yet. Subscribe to streamers to support them and get exclusive benefits!
               </p>
               <Link 
                 to="/home" 
                 className="inline-flex items-center px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
               >
-                Explore Streams
+                Explore Streamers
               </Link>
             </div>
           </div>
@@ -140,71 +140,82 @@ export default function Subscriptions() {
             isDarkMode ? 'bg-gray-900 border border-gray-800' : 'bg-white'
           }`}>
             <div className="p-6">
-              <h2 className={`text-xl font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                Your Subscriptions ({subscriptions.length})
-              </h2>
+              <div className="mb-6">
+                <h2 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                  Active Subscriptions ({subscriptions.length})
+                </h2>
+              </div>
               
               <div className="space-y-4">
                 {subscriptions.map((subscription) => (
                   <div 
                     key={subscription.id} 
-                    className={`flex items-center justify-between p-4 rounded-lg border ${
-                      isDarkMode ? 'border-gray-700 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'
-                    } transition-colors`}
+                    className={`p-4 rounded-lg border transition-all ${
+                      isDarkMode 
+                        ? 'border-gray-700 hover:bg-gray-800' 
+                        : 'border-gray-200 hover:bg-gray-50'
+                    }`}
                   >
-                    <div className="flex items-center space-x-4">
-                      <div className={`h-12 w-12 rounded-full flex items-center justify-center text-lg font-semibold ${
-                        isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                      }`}>
-                        {subscription.username.charAt(0).toUpperCase()}
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start space-x-4">
+                        <div className={`h-12 w-12 rounded-full flex items-center justify-center text-lg font-semibold ${
+                          isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
+                        }`}>
+                          {subscription.username.charAt(0).toUpperCase()}
+                        </div>
+                        
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Link 
+                              to={`/u/${subscription.username}`}
+                              className={`text-lg font-medium hover:underline ${
+                                isDarkMode ? 'text-white' : 'text-gray-900'
+                              }`}
+                            >
+                              {subscription.displayName || subscription.username}
+                            </Link>
+                          </div>
+                          
+                          {subscription.username !== subscription.displayName && (
+                            <p className={`text-sm mb-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                              @{subscription.username}
+                            </p>
+                          )}
+                          
+                          {subscription.subscribedAt && (
+                            <p className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-500'}`}>
+                              Subscribed {new Date(subscription.subscribedAt).toLocaleDateString()}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      <div>
-                        <Link 
+                      
+                      <div className="flex items-center space-x-3 ml-4">
+                        <Link
                           to={`/u/${subscription.username}`}
-                          className={`text-lg font-medium hover:underline ${
-                            isDarkMode ? 'text-white' : 'text-gray-900'
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                            isDarkMode 
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                              : 'bg-blue-600 hover:bg-blue-700 text-white'
                           }`}
                         >
-                          {subscription.displayName || subscription.username}
+                          View Channel
                         </Link>
-                        {subscription.username !== subscription.displayName && (
-                          <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                            @{subscription.username}
-                          </p>
-                        )}
-                        {subscription.subscribedAt && (
-                          <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                            Subscribed {new Date(subscription.subscribedAt).toLocaleDateString()}
-                          </p>
-                        )}
+                        
+                        <button
+                          onClick={() => {
+                            // TODO: Implement unsubscribe functionality
+                            alert('Unsubscribe functionality will be implemented soon!');
+                          }}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                            isDarkMode 
+                              ? 'border-gray-600 text-gray-300 hover:bg-gray-800' 
+                              : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          Unsubscribe
+                        </button>
                       </div>
-                    </div>
-                    
-                    <div className="flex items-center space-x-3">
-                      <Link
-                        to={`/${subscription.username}`}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                          isDarkMode 
-                            ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                            : 'bg-blue-600 hover:bg-blue-700 text-white'
-                        }`}
-                      >
-                        Watch
-                      </Link>
-                      
-                      <button
-                        onClick={() => {
-                          // TODO: Implement unsubscribe functionality
-                          alert('Unsubscribe functionality will be implemented soon!');
-                        }}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                          isDarkMode 
-                            ? 'border-gray-600 text-gray-300 hover:bg-gray-800' 
-                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                        }`}
-                      >
-                        Unsubscribe
-                      </button>
                     </div>
                   </div>
                 ))}

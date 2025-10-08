@@ -31,37 +31,51 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
   const [hasJoinedStream, setHasJoinedStream] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'error' | 'session_expired'>('disconnected');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  
+
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesEndRef.current) {
+      // Use scrollIntoView with block: 'nearest' to prevent page scrolling
+      messagesEndRef.current.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'nearest',
+        inline: 'nearest'
+      });
+    }
   };
 
   useEffect(() => {
     console.log('Messages state updated, length:', messages.length, messages);
+    messagesRef.current = messages; // Keep ref in sync with state
     scrollToBottom();
   }, [messages]);
 
+
+
+
   // Initialize Socket.IO connection
   useEffect(() => {
-    // Don't attempt chat connection if user/token is missing
-    if (!user || !token) {
-      console.log('⚠️ Skipping chat connection - user not authenticated');
-      setConnectionStatus('disconnected');
-      return;
-    }
+    // Allow connection for non-authenticated users to view chat, but skip auth
+    const isAuthenticated = user && token;
 
-    console.log('Initializing Socket.IO connection to lb-01.homelab.com/chat');
-    const newSocket = io('http://lb-01.homelab.com/chat', {
+    console.log('Initializing Socket.IO connection to lb-01.distorted.live/chat');
+    const newSocket = io('https://lb-01.distorted.live/chat', {
       transports: ['polling', 'websocket'], // Try polling first, then websocket
       timeout: 10000,
       reconnection: true,
       reconnectionAttempts: 3, // Reduced attempts to fail faster
       reconnectionDelay: 2000, // Increased delay between attempts
       forceNew: true,
-      auth: {
+      auth: isAuthenticated ? {
         token: token,
         username: user.username
+      } : {
+        token: null,
+        username: `Anonymous${Math.floor(Math.random() * 1000)}`
       }
     });
 
@@ -134,9 +148,9 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
       setHasJoinedStream(true);
       
       // If there's chat history in the response, load it
-      if (data && data.messages && Array.isArray(data.messages)) {
-        console.log('Loading chat history:', data.messages);
-        const historyMessages: ChatMessage[] = data.messages.map((msg: any) => ({
+      if (data && data.history && Array.isArray(data.history)) {
+        console.log('Loading chat history:', data.history);
+        const historyMessages: ChatMessage[] = data.history.map((msg: any) => ({
           id: msg.id || Date.now().toString(),
           username: msg.username || 'Unknown',
           message: msg.message || '',
@@ -145,6 +159,7 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
           isModerator: msg.isModerator || false,
           isSystem: msg.isSystem || false
         }));
+        
         setMessages(historyMessages);
       } else if (data && Array.isArray(data)) {
         // Handle case where data is directly an array of messages
@@ -158,6 +173,7 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
           isModerator: msg.isModerator || false,
           isSystem: msg.isSystem || false
         }));
+        
         setMessages(historyMessages);
       } else {
         // Add welcome message if no history
@@ -238,12 +254,25 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
     };
   }, [streamId, token, user?.username]);
 
-  const sendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
+  const sendMessage = (e?: React.FormEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     
-    if (!socket || !inputMessage.trim() || !isConnected) {
+    if (!socket || !inputMessage.trim() || !isConnected || !user) {
       return;
     }
+
+    // Temporarily prevent any scrolling
+    const currentScrollY = window.scrollY;
+    const preventScroll = (e: Event) => {
+      e.preventDefault();
+      window.scrollTo(0, currentScrollY);
+    };
+    
+    window.addEventListener('scroll', preventScroll, { passive: false });
+    document.addEventListener('scroll', preventScroll, { passive: false });
 
     const messageData = {
       streamId: streamId,
@@ -253,6 +282,16 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
     console.log('📤 Sending message:', messageData);
     socket.emit('send_message', messageData);
     setInputMessage('');
+    
+    // Keep focus on input and restore scroll position
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+      }
+      window.scrollTo(0, currentScrollY);
+      window.removeEventListener('scroll', preventScroll);
+      document.removeEventListener('scroll', preventScroll);
+    }, 0);
   };
 
   const retryJoinStream = () => {
@@ -381,19 +420,31 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
       <div className={`p-4 border-t ${
         isDarkMode ? 'border-gray-700' : 'border-gray-200'
       }`}>
-        <form onSubmit={sendMessage} className="flex space-x-2">
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          sendMessage();
+        }} className="flex space-x-2">
           <input
+            ref={inputRef}
             type="text"
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                sendMessage();
+              }
+            }}
             placeholder={
               !isConnected 
                 ? "Connecting to chat..." 
                 : user 
                 ? "Type a message..." 
-                : "Chatting as anonymous..."
+                : "Login to chat..."
             }
-            disabled={!isConnected}
+            disabled={!isConnected || !user}
             className={`flex-1 px-3 py-2 rounded-lg border text-sm ${
               isDarkMode 
                 ? 'bg-gray-800 border-gray-600 text-white placeholder-gray-400'
@@ -402,7 +453,7 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
           />
           <button
             type="submit"
-            disabled={!isConnected || !inputMessage.trim()}
+            disabled={!isConnected || !inputMessage.trim() || !user}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Send
@@ -412,7 +463,7 @@ export default function ChatComponent({ streamId, streamName, className = '' }: 
           <p className={`text-xs mt-2 ${
             isDarkMode ? 'text-gray-400' : 'text-gray-500'
           }`}>
-            You're chatting anonymously. <Link to="/login" className="text-blue-500 cursor-pointer hover:underline">Log in</Link> to chat with your username.
+            <Link to="/login" className="text-blue-500 cursor-pointer hover:underline">Log in</Link> to chat with your username.
           </p>
         )}
       </div>

@@ -2,7 +2,7 @@ import { useContext, useEffect, useState, useMemo } from 'react';
 import AuthContext from '../contexts/AuthContext';
 import { useDarkMode } from '../contexts/DarkModeContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { searchUsers } from '../services/streamApi';
+import { searchUsers, getPublicUserProfile } from '../services/streamApi';
 
 type Stream = {
   id: number;
@@ -34,118 +34,141 @@ export default function Home() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
+
+  // Update default tab based on login status
+  useEffect(() => {
+    if (!loading) {
+      setActiveTab(user ? 'following' : 'explore');
+    }
+  }, [user, loading]);
   
-  const [activeTab, setActiveTab] = useState<HomeTab>('following');
+  const [activeTab, setActiveTab] = useState<HomeTab>(user ? 'following' : 'explore');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortBy, setSortBy] = useState<SortOption>('status');
   const [showOffline, setShowOffline] = useState<boolean>(false);
   // Removed category selection since backend doesn't support categories yet
 
+  // Track streams that just went live to poll for their initial thumbnails
+  const [newlyLiveStreams, setNewlyLiveStreams] = useState<Set<string>>(new Set());
+
+  // Poll for thumbnails on newly live streams
+  useEffect(() => {
+    if (newlyLiveStreams.size === 0) return;
+
+    const pollNewThumbnails = async () => {
+      const streamsToCheck = Array.from(newlyLiveStreams);
+      
+      for (const username of streamsToCheck) {
+        // Wait 30 seconds after stream goes live (mirror thumbnail generator timing)
+        setTimeout(async () => {
+          const thumbnailUrl = `https://lb-01.distorted.live/stream/${username}/thumbnail.jpg?t=${Date.now()}`;
+          
+          try {
+            const response = await fetch(thumbnailUrl, { method: 'HEAD' });
+            if (response.ok) {
+              // Thumbnail exists, update the stream
+              setStreams(prevStreams => {
+                return prevStreams.map(stream => {
+                  if (stream.username === username && stream.status === 'live') {
+                    return { ...stream, thumbnail: thumbnailUrl };
+                  }
+                  return stream;
+                });
+              });
+              
+              // Remove from newly live tracking
+              setNewlyLiveStreams(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(username);
+                return newSet;
+              });
+            }
+          } catch (error) {
+            // Thumbnail not ready yet, will try again on next polling cycle
+          }
+        }, 30000);
+      }
+    };
+
+    pollNewThumbnails();
+  }, [newlyLiveStreams])
+
   // Fetch streams from backend API
   useEffect(() => {
     const fetchStreams = async () => {
       try {
-        let url = 'http://lb-01.homelab.com/api/streams';
+        let url = 'https://lb-01.distorted.live/api/streams';
         const headers: HeadersInit = {
           'Content-Type': 'application/json',
         };
         
-        console.log('Fetching streams for tab:', activeTab, 'showOffline:', showOffline, 'hasToken:', !!token);
         
         // Use different endpoints based on tab
         if (activeTab === 'explore') {
           // Try using query parameters instead of different endpoints
           if (showOffline) {
             // Try with a query parameter first, fallback to different approaches
-            url = 'http://lb-01.homelab.com/api/streams/live?includeOffline=true';
-            console.log('Explore tab (with offline) - trying URL with query param:', url);
+            url = `${import.meta.env.VITE_API_BASE_URL}/streams/live?includeOffline=true`;
           } else {
-            url = 'http://lb-01.homelab.com/api/streams/live';
-            console.log('Explore tab (live only) - URL:', url);
+            url = `${import.meta.env.VITE_API_BASE_URL}/streams/live`;
           }
-          console.log('Explore tab - headers:', headers);
-          // Don't add Authorization header for explore tab
+          // For offline streams, we might need auth - try adding token if available
+          if (showOffline && token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
         } else if (activeTab === 'following') {
           if (!token) {
             // Not authenticated, can't show following
-            console.log('Following tab but no token, returning empty');
             setStreams([]);
             return;
           }
           // User's following streams - auth required
           headers['Authorization'] = `Bearer ${token}`;
           
-          // Apply offline filter to following tab too
-          if (showOffline) {
-            // Try using the same endpoint pattern that works for explore
-            url = 'http://lb-01.homelab.com/api/streams/following?includeOffline=true'; 
-            console.log('Following tab (with offline) - trying following-specific URL:', url);
-          } else {
-            // For live only, try following-specific live endpoint
-            url = 'http://lb-01.homelab.com/api/streams/following'; 
-            console.log('Following tab (live only) - URL:', url);
-          }
-          console.log('Following tab - headers:', headers);
+          // Always include offline streams in following tab
+          url = `${import.meta.env.VITE_API_BASE_URL}/streams/following?includeOffline=true`;
         } else {
           // Unknown tab
-          console.log('Unknown tab:', activeTab);
           setStreams([]);
           return;
         }
         
-        console.log('Making request to:', url, 'with headers:', headers);
-        console.log('🔍 REQUEST DEBUG:', { 
-          tab: activeTab, 
-          showOffline: showOffline, 
-          hasToken: !!token,
-          url: url 
-        });
         let response = await fetch(url, { headers });
         
         // If the request failed, try fallback approaches based on tab
         if (!response.ok) {
-          console.log('First attempt failed (', response.status, '), trying fallback approaches...');
-          console.log('💡 Note: If you see 404 for /api/streams/following, the backend may need to implement this endpoint');
           
           if (activeTab === 'explore' && showOffline) {
-            // Fallback for explore tab
+            // Fallback for explore tab - use the same correct endpoint
             try {
-              console.log('Explore fallback: Trying /api/streams without auth...');
-              const fallbackResponse = await fetch('http://lb-01.homelab.com/api/streams', { 
+              const fallbackResponse = await fetch(`${import.meta.env.VITE_API_BASE_URL}/streams/live?includeOffline=true`, { 
                 headers: { 'Content-Type': 'application/json' } 
               });
               if (fallbackResponse.ok) {
                 response = fallbackResponse;
-                console.log('Explore fallback successful!');
               }
             } catch (fallbackError) {
-              console.log('Explore fallback also failed:', fallbackError);
             }
           } else if (activeTab === 'following') {
-            // Since the backend wants /api/streams/following, try different variations
+            // Try different following endpoint variations, but never fallback to all streams
             try {
               // Try without the query parameter first
-              const fallbackUrl1 = 'http://lb-01.homelab.com/api/streams/following';
-              console.log('Following fallback 1: Trying', fallbackUrl1);
-              let fallbackResponse = await fetch(fallbackUrl1, { headers });
+              const fallbackUrl1 = `${import.meta.env.VITE_API_BASE_URL}/streams/following`;
+              const fallbackResponse = await fetch(fallbackUrl1, { headers });
               
               if (fallbackResponse.ok) {
                 response = fallbackResponse;
-                console.log('Following fallback 1 successful!');
               } else {
-                // Try the old approach as last resort
-                const fallbackUrl2 = showOffline 
-                  ? 'http://lb-01.homelab.com/api/streams?includeOffline=true'
-                  : 'http://lb-01.homelab.com/api/streams';
-                console.log('Following fallback 2: Trying', fallbackUrl2);
-                fallbackResponse = await fetch(fallbackUrl2, { headers });
-                if (fallbackResponse.ok) {
-                  response = fallbackResponse;
-                  console.log('Following fallback 2 successful!');
-                }
+                // If following endpoints don't work, show empty state instead of all streams
+                console.warn('Following endpoints not available, showing empty following list');
+                setStreams([]);
+                return;
               }
             } catch (fallbackError) {
-              console.log('All following fallbacks failed:', fallbackError);
+              // If following endpoint fails, show empty state
+              console.warn('Following endpoint failed, showing empty following list');
+              setStreams([]);
+              return;
             }
           }
         }
@@ -160,41 +183,63 @@ export default function Home() {
         }
         
         const data = await response.json();
-        console.log('API response received:', { 
-          totalCount: data.totalCount, 
-          includeOffline: data.includeOffline, 
-          streamsCount: data.streams?.length || 0 
-        });
-        console.log('API response structure validated');
-        console.log('Stream data received from API');
         
         // Extract username from stream_key for each stream
         // Assumes stream_key format is "username_randomnumbers"
         const streams = data.streams || [];
-        console.log('Streams count:', streams.length);
-        console.log('🔍 RAW STREAM DETAILS:');
-        streams.forEach((s: any, i: number) => {
-          const extractedUsername = s.username || (s.stream_key ? s.stream_key.split('_')[0] : 'unknown');
-          console.log(`  Stream ${i+1}: username="${extractedUsername}", status="${s.status}", has_thumbnail="${!!s.thumbnail}"`);
+        
+        const streamsWithUsername = streams.map((stream: any) => {
+          const username = stream.username || (stream.stream_key ? stream.stream_key.split('_')[0] : 'unknown');
+          
+          // Trust the API status completely - no frontend verification
+          const status = stream.status || (stream.isLive ? 'live' : 'offline');
+          
+          // Only try thumbnails for streams the API says are live
+          let thumbnailUrl = stream.thumbnail || stream.thumbnailUrl;
+          if (!thumbnailUrl && status === 'live') {
+            thumbnailUrl = `https://lb-01.distorted.live/stream/${username}/thumbnail.jpg`;
+          }
+          
+          return {
+            ...stream,
+            username: username,
+            status: status,
+            thumbnail: thumbnailUrl
+          };
         });
         
-        const streamsWithUsername = streams.map((stream: any) => ({
-          ...stream,
-          // Handle both old format (stream_key) and new format (username field)
-          username: stream.username || (stream.stream_key ? stream.stream_key.split('_')[0] : 'unknown')
-        }));
-        
         // Remove duplicates based on username (in case API returns duplicates)
-        const uniqueStreams = streamsWithUsername.filter((stream: any, index: number, self: any[]) => 
+        let uniqueStreams = streamsWithUsername.filter((stream: any, index: number, self: any[]) => 
           self.findIndex((s: any) => s.username === stream.username) === index
         );
         
-        console.log('Stream processing completed');
-        console.log('✅ FINAL STREAMS SHOWN IN UI:');
-        uniqueStreams.forEach((s: any, i: number) => {
-          console.log(`  Final ${i+1}: username="${s.username}", status="${s.status}"`);
+        // Additional safety: never show user's own stream in Following tab
+        if (activeTab === 'following' && user?.username) {
+          uniqueStreams = uniqueStreams.filter((stream: any) => stream.username !== user.username);
+        }
+        
+        // Preserve existing profile pictures and detect newly live streams
+        setStreams(prevStreams => {
+          const updatedStreams = uniqueStreams.map((newStream: Stream) => {
+            // Find existing stream to preserve profile picture
+            const existingStream = prevStreams.find(s => s.username === newStream.username);
+            
+            // Check if this stream just went live
+            if (newStream.status === 'live' && 
+                existingStream && 
+                existingStream.status !== 'live') {
+              // Stream just went live, add to newly live tracking
+              setNewlyLiveStreams(prev => new Set(prev).add(newStream.username));
+            }
+            
+            return {
+              ...newStream,
+              profilePicture: existingStream?.profilePicture || newStream.profilePicture
+            };
+          });
+          
+          return updatedStreams;
         });
-        setStreams(uniqueStreams);
       } catch (error) {
         console.error('Error fetching streams:', error);
         // Fallback to empty array or show error message
@@ -205,11 +250,54 @@ export default function Home() {
     // Fetch immediately
     fetchStreams();
 
-    // Set up polling every 30 seconds to check for live status updates
-    const pollInterval = setInterval(fetchStreams, 30000);
+    // Set up polling every 45 seconds to check for live status updates
+    const pollInterval = setInterval(fetchStreams, 45000);
 
     return () => clearInterval(pollInterval);
   }, [loading, activeTab, token, showOffline]);
+
+  // Fetch profile pictures when streams change (but not on every poll)
+  useEffect(() => {
+    const fetchProfilePictures = async (streamList: Stream[]) => {
+      try {
+        // Only fetch for streams that don't already have profile pictures
+        const streamsNeedingProfilePics = streamList.filter(stream => !stream.profilePicture);
+        
+        if (streamsNeedingProfilePics.length === 0) {
+          return; // All streams already have profile pictures
+        }
+
+        const updatedStreams = await Promise.all(
+          streamList.map(async (stream) => {
+            // Skip if already has profile picture (from cache or previous fetch)
+            if (stream.profilePicture) {
+              return stream;
+            }
+            
+            try {
+              const profile = await getPublicUserProfile(stream.username);
+              return {
+                ...stream,
+                profilePicture: profile.profilePicture || undefined
+              };
+            } catch (error) {
+              // If profile fetch fails, keep the stream without profile picture
+              return stream;
+            }
+          })
+        );
+        
+        setStreams(updatedStreams);
+      } catch (error) {
+        console.error('Error fetching profile pictures:', error);
+        // Keep streams without profile pictures if fetch fails
+      }
+    };
+
+    if (streams.length > 0) {
+      fetchProfilePictures(streams);
+    }
+  }, [streams.length]); // Only trigger when number of streams changes
 
   // Search users when search query changes
   useEffect(() => {
@@ -222,9 +310,23 @@ export default function Home() {
 
       setIsSearching(true);
       try {
-        console.log('Searching for users:', searchQuery);
+        const query = searchQuery.trim().toLowerCase();
+        
+        // First, search within currently loaded streams (especially important when offline streams are shown)
+        const localResults = streams.filter(stream => 
+          stream.username.toLowerCase().includes(query) ||
+          stream.title.toLowerCase().includes(query)
+        );
+        
+        // If we found results in current streams, use those
+        if (localResults.length > 0) {
+          setSearchResults(localResults);
+          setIsSearching(false);
+          return;
+        }
+        
+        // If no local results, try the API search as fallback
         const results = await searchUsers(searchQuery.trim());
-        console.log('Search results:', results);
         
         // Convert search results to stream-like format for display
         const convertedResults = results.users.map(user => ({
@@ -240,7 +342,6 @@ export default function Home() {
         
         setSearchResults(convertedResults);
       } catch (error) {
-        console.error('Search failed:', error);
         setSearchResults([]);
       } finally {
         setIsSearching(false);
@@ -250,7 +351,7 @@ export default function Home() {
     // Debounce search by 500ms
     const searchTimeout = setTimeout(performSearch, 500);
     return () => clearTimeout(searchTimeout);
-  }, [searchQuery]);
+  }, [searchQuery, streams]); // Added streams as dependency
 
   // Filter and sort streams
   const filteredStreams = useMemo(() => {
@@ -258,8 +359,6 @@ export default function Home() {
     const isActivelySearching = searchQuery.trim().length > 0;
     const sourceStreams = isActivelySearching ? searchResults : streams;
     
-    console.log('Filtering - isActivelySearching:', isActivelySearching, 'sourceStreams length:', sourceStreams.length);
-    console.log('Search query:', `"${searchQuery}"`, 'Search results:', searchResults.length);
     
     const filtered = sourceStreams.filter((_stream: any) => {
       // If we're using search results, don't filter further
@@ -388,23 +487,26 @@ export default function Home() {
               <option value="title">Title A-Z</option>
             </select>
             
-            <label className={`flex items-center gap-2 px-4 py-2 border rounded-lg shadow-sm cursor-pointer transition-colors ${
-              isDarkMode
-                ? 'bg-gray-900 border-gray-700 text-gray-300 hover:bg-gray-800'
-                : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-            }`}>
-              <input
-                type="checkbox"
-                checked={showOffline}
-                onChange={(e) => setShowOffline(e.target.checked)}
-                className={`w-4 h-4 rounded focus:ring-2 focus:ring-blue-500 ${
-                  isDarkMode
-                    ? 'bg-gray-800 border-gray-600 text-blue-600'
-                    : 'bg-white border-gray-300 text-blue-600'
-                }`}
-              />
-              <span className="text-sm font-medium">Show Offline</span>
-            </label>
+            {/* Only show "Show Offline" toggle on explore tab */}
+            {activeTab === 'explore' && (
+              <label className={`flex items-center gap-2 px-4 py-2 border rounded-lg shadow-sm cursor-pointer transition-colors ${
+                isDarkMode
+                  ? 'bg-gray-900 border-gray-700 text-gray-300 hover:bg-gray-800'
+                  : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}>
+                <input
+                  type="checkbox"
+                  checked={showOffline}
+                  onChange={(e) => setShowOffline(e.target.checked)}
+                  className={`w-4 h-4 rounded focus:ring-2 focus:ring-blue-500 ${
+                    isDarkMode
+                      ? 'bg-gray-800 border-gray-600 text-blue-600'
+                      : 'bg-white border-gray-300 text-blue-600'
+                  }`}
+                />
+                <span className="text-sm font-medium">Show Offline</span>
+              </label>
+            )}
           </div>
         </div>
 
@@ -493,7 +595,6 @@ export default function Home() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {filteredStreams.map((stream) => {
-                console.log('🎨 RENDERING STREAM CARD:', { username: stream.username, status: stream.status, id: stream.id, tab: activeTab });
                 return (
                   <Link
                     to={`/${stream.username}`}
@@ -516,11 +617,7 @@ export default function Home() {
                                 src={stream.thumbnail} 
                                 alt={`${stream.username} stream thumbnail`}
                                 className="w-full h-full object-cover"
-                                onLoad={() => {
-                                  console.log('✅ Thumbnail loaded successfully:', stream.thumbnail);
-                                }}
                                 onError={(e) => {
-                                  console.error('❌ Thumbnail failed to load:', stream.thumbnail);
                                   // Fallback to placeholder icon if thumbnail fails to load
                                   const target = e.target as HTMLImageElement;
                                   target.style.display = 'none';
@@ -547,10 +644,12 @@ export default function Home() {
                           <div className="absolute top-3 left-3 bg-red-600 text-white text-xs px-2 py-1 rounded-full font-semibold">
                             LIVE
                           </div>
-                          
-                          {/* Profile Picture Overlay - Bottom Right */}
-                          <div className="absolute bottom-3 right-3">
-                            <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold overflow-hidden border-2 border-white shadow-lg bg-black text-white">
+                        </div>
+                        
+                        <div className="p-4">
+                          <div className="flex items-start space-x-3">
+                            {/* Profile Picture */}
+                            <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold overflow-hidden border border-gray-600 bg-black text-white flex-shrink-0">
                               {stream.profilePicture ? (
                                 <img 
                                   src={stream.profilePicture} 
@@ -561,20 +660,21 @@ export default function Home() {
                                 stream.username?.[0]?.toUpperCase() || 'U'
                               )}
                             </div>
+                            
+                            {/* Stream Info */}
+                            <div className="flex-1 min-w-0">
+                              <h3 className={`font-semibold mb-1 line-clamp-2 group-hover:text-blue-600 transition-colors ${
+                                isDarkMode ? 'text-white' : 'text-gray-900'
+                              }`}>
+                                {stream.title}
+                              </h3>
+                              <p className={`text-sm ${
+                                isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                              }`}>
+                                {stream.username}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        
-                        <div className="p-4">
-                          <h3 className={`font-semibold mb-2 line-clamp-2 group-hover:text-blue-600 transition-colors ${
-                            isDarkMode ? 'text-white' : 'text-gray-900'
-                          }`}>
-                            {stream.title}
-                          </h3>
-                          <p className={`text-sm mb-1 ${
-                            isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                          }`}>
-                            {stream.username}
-                          </p>
                         </div>
                       </>
                     ) : (

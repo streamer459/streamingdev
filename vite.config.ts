@@ -10,7 +10,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0', // Allow external access
     port: 8080,      // Use port 8080 instead of 5173
-    allowedHosts: ['frontend-01.homelab.com', 'localhost', '127.0.0.1'],
+    allowedHosts: ['frontend-01.distorted.live', 'localhost', '127.0.0.1'],
   },
   css: {
     postcss: {

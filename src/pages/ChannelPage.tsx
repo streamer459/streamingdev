@@ -2,7 +2,7 @@ import { useEffect, useState, useContext, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useDarkMode } from '../contexts/DarkModeContext';
 import AuthContext from '../contexts/AuthContext';
-import { getPublicStreamData, getMyFollowers, getMySubscribers, updateUserProfile, getUserProfile, getActivityFeed, updateStreamTitle, getStreamTitle } from '../services/streamApi';
+import { getPublicStreamData, getMyFollowers, getMySubscribers, updateUserProfile, getUserProfile, getActivityFeed, updateStreamTitle, getStreamTitle, getPublicUserProfile } from '../services/streamApi';
 import BitrateGraph from '../components/BitrateGraph';
 
 type ChannelInfo = {
@@ -32,6 +32,8 @@ type ActivityItem = {
   timestamp: string;
 };
 
+type ChannelTab = 'channel' | 'monetization' | 'analytics' | 'moderation';
+
 export default function ChannelPage() {
   const { username } = useParams<{ username: string }>();
   const { isDarkMode } = useDarkMode();
@@ -45,6 +47,7 @@ export default function ChannelPage() {
   const [loadingSubscribers, setLoadingSubscribers] = useState(false);
   const [showFollowers, setShowFollowers] = useState(false);
   const [showSubscribers, setShowSubscribers] = useState(false);
+  const [activeTab, setActiveTab] = useState<ChannelTab>('channel');
   
   // Session time tracking
   
@@ -52,6 +55,10 @@ export default function ChannelPage() {
   const [isEditingAbout, setIsEditingAbout] = useState(false);
   const [aboutText, setAboutText] = useState('');
   const [savingAbout, setSavingAbout] = useState(false);
+  const [originalAboutText, setOriginalAboutText] = useState('');
+  
+  // Fresh profile picture
+  const [freshProfilePicture, setFreshProfilePicture] = useState<string | null>(null);
   
   // Stream title editing
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -90,17 +97,26 @@ export default function ChannelPage() {
         return;
       }
       
-      console.log('Fetching channel data for username:', username);
       
       try {
         // Get stream data from the public API
         const streamData = await getPublicStreamData(username);
-        console.log('Channel data received for:', username);
+        
+        // For own channel, also fetch user profile to get the most up-to-date bio
+        let userBio = streamData.description || `${username}'s channel`;
+        if (isOwnChannel && token) {
+          try {
+            const userProfile = await getUserProfile(token);
+            userBio = userProfile.bio || userBio;
+          } catch (profileError) {
+            console.warn('Could not fetch user profile for bio, using stream data bio');
+          }
+        }
         
         // Convert stream data to channel info format
         const channelInfo: ChannelInfo = {
           username: streamData.username || streamData.streamer || username,
-          bio: streamData.description || `${username}'s channel`,
+          bio: userBio,
           totalFollowers: streamData.followerCount || 0,
           live: streamData.status === 'live' || streamData.isLive || false,
           title: streamData.title,
@@ -108,25 +124,34 @@ export default function ChannelPage() {
           uptime: streamData.uptime,
         };
         
-        // If we already have a more accurate follower count from the followers API, preserve it
+        // Update only polling-relevant data (live status, viewers, uptime) - preserve user-generated content
         setChannel(prev => {
-          
-          if (prev && prev.totalFollowers > channelInfo.totalFollowers) {
-            // Keep the higher count (from followers API)
-            console.log('Preserving higher follower count:', prev.totalFollowers, 'vs', channelInfo.totalFollowers);
-            return {
-              ...channelInfo,
-              totalFollowers: prev.totalFollowers
-            };
-          }
-          console.log('Setting channel info:', channelInfo);
-          
-          // Initialize about text if this is the own channel
-          if (isOwnChannel && !aboutText) {
-            setAboutText(channelInfo.bio);
+          if (!prev) {
+            // First load - use all data from API
+            
+            // Initialize about text if this is the own channel
+            if (isOwnChannel && !aboutText) {
+              setAboutText(channelInfo.bio);
+              setOriginalAboutText(channelInfo.bio);
+            }
+            
+            return channelInfo;
           }
           
-          return channelInfo;
+          // Subsequent polling updates - preserve user-generated content, update only live data
+          const higherFollowerCount = prev.totalFollowers > channelInfo.totalFollowers ? prev.totalFollowers : channelInfo.totalFollowers;
+          
+          console.log('Polling update: preserving user-generated content, updating live data only');
+          return {
+            ...prev, // Preserve existing data
+            // Update only live/polling data
+            live: channelInfo.live,
+            viewerCount: channelInfo.viewerCount,
+            uptime: channelInfo.uptime,
+            totalFollowers: higherFollowerCount,
+            // Keep user-generated content (bio, title) unchanged during polling
+            // These will only be updated via real-time save actions
+          };
         });
       } catch (error) {
         console.error('Failed to fetch channel data:', error);
@@ -159,7 +184,7 @@ export default function ChannelPage() {
         // Note: Removed automatic follower fetching to reduce API load
         // Followers are now only fetched on manual refresh or when user clicks to view them
       }
-    }, 30000);
+    }, 90000); // Reduced from 30s to 90s to avoid rate limiting
 
     return () => {
       clearTimeout(timeoutId);
@@ -216,6 +241,30 @@ export default function ChannelPage() {
     }
   };
 
+  // Fetch fresh profile picture for the channel
+  useEffect(() => {
+    const fetchFreshProfilePicture = async () => {
+      if (username) {
+        try {
+          const profile = await getPublicUserProfile(username);
+          setFreshProfilePicture(profile.profilePicture || null);
+        } catch (error) {
+          // If fetch fails, keep using the context profile picture
+          setFreshProfilePicture(null);
+        }
+      } else {
+        setFreshProfilePicture(null);
+      }
+    };
+
+    // Delay to prevent simultaneous API calls
+    setTimeout(() => {
+      fetchFreshProfilePicture();
+    }, 200);
+  }, [username]);
+
+  // Profile WebSocket is already initialized globally in main.tsx
+
   // Fetch stream title for own channel
   useEffect(() => {
     const fetchStreamTitle = async () => {
@@ -230,20 +279,34 @@ export default function ChannelPage() {
       }
     };
 
-    fetchStreamTitle();
+    // Delay to prevent simultaneous API calls
+    setTimeout(() => {
+      fetchStreamTitle();
+    }, 300);
   }, [isOwnChannel, token]);
 
   const handleSaveTitle = async () => {
     if (!token || !isOwnChannel || savingTitle) return;
     
     setSavingTitle(true);
+    const originalTitle = channel?.title;
+    
     try {
       await updateStreamTitle(token, streamTitle);
+      
+      // Immediately update the channel info with the new title (real-time update)
+      setChannel(prev => prev ? {
+        ...prev,
+        title: streamTitle
+      } : null);
+      
       setIsEditingTitle(false);
-      console.log('Stream title updated successfully');
     } catch (error) {
       console.error('Failed to update stream title:', error);
-      // Optionally show error message to user
+      // Revert the streamTitle on error
+      if (originalTitle !== undefined) {
+        setStreamTitle(originalTitle);
+      }
     } finally {
       setSavingTitle(false);
     }
@@ -283,58 +346,46 @@ export default function ChannelPage() {
       
       await updateUserProfile(token, updatedProfile);
       
-      // Update the channel info with the new bio
+      // Immediately update the channel info with the new bio (real-time update)
       setChannel(prev => prev ? {
         ...prev,
         bio: aboutText
       } : null);
       
       setIsEditingAbout(false);
-      console.log('Channel description updated successfully');
+      setOriginalAboutText(aboutText);
     } catch (error) {
       console.error('Failed to update channel description:', error);
-      // Optionally show error message to user
+      // Revert the aboutText on error
+      setAboutText(originalAboutText);
     } finally {
       setSavingAbout(false);
     }
   };
 
   const handleCancelAbout = () => {
-    if (channel) {
-      setAboutText(channel.bio);
-    }
+    setAboutText(originalAboutText);
     setIsEditingAbout(false);
   };
 
   // Fetch activity feed data
   const fetchActivityFeed = useCallback(async () => {
     if (!isOwnChannel) {
-      console.log('🔍 fetchActivityFeed - skipping:', { isOwnChannel });
       return;
     }
     
     // Check loading state inside the function to avoid dependency loop
     if (loadingActivities) {
-      console.log('🔍 fetchActivityFeed - already loading, skipping');
       return;
     }
-    
-    console.log('🔍 fetchActivityFeed - starting for user:', username);
     setLoadingActivities(true);
     try {
       const data = await getActivityFeed(token!, 10);
-      console.log('🔍 ACTIVITY FEED DEBUG - Raw API response:', data);
-      console.log('🔍 ACTIVITY FEED DEBUG - Activities array:', data.activities);
-      console.log('🔍 ACTIVITY FEED DEBUG - Activities length:', data.activities?.length || 0);
       
       if (data.activities && Array.isArray(data.activities)) {
         setActivities(data.activities);
-        console.log('✅ Activity feed updated with', data.activities.length, 'real items');
         
-        if (data.activities.length === 0) {
-          console.log('⚠️ Backend returned empty activities array despite logged activity');
-          console.log('⚠️ Please verify that /api/user/activity is reading from the same database table where activity is being stored');
-        }
+        // Keep empty activities if backend returns empty array
       } else {
         console.warn('⚠️ Invalid activities data structure:', data);
         setActivities([]);
@@ -365,24 +416,30 @@ export default function ChannelPage() {
         uptime: streamData.uptime,
       };
       
-      // If we already have a more accurate follower count from the followers API, preserve it
+      // Manual refresh - update live data only, preserve user-generated content
       setChannel(prev => {
-        
-        if (prev && prev.totalFollowers > channelInfo.totalFollowers) {
-          // Keep the higher count (from followers API)
-          console.log('Refresh: Preserving higher follower count:', prev.totalFollowers, 'vs', channelInfo.totalFollowers);
-          return {
-            ...channelInfo,
-            totalFollowers: prev.totalFollowers
-          };
+        if (!prev) {
+          return channelInfo;
         }
-        console.log('Refresh: Setting channel info:', channelInfo);
-        return channelInfo;
+        
+        // Preserve user-generated content, update only live data
+        const higherFollowerCount = prev.totalFollowers > channelInfo.totalFollowers ? prev.totalFollowers : channelInfo.totalFollowers;
+        
+        console.log('Refresh: preserving user-generated content, updating live data only');
+        return {
+          ...prev, // Preserve existing data
+          // Update only live/polling data
+          live: channelInfo.live,
+          viewerCount: channelInfo.viewerCount,
+          uptime: channelInfo.uptime,
+          totalFollowers: higherFollowerCount,
+          // Keep user-generated content (bio, title) unchanged during refresh
+          // These will only be updated via real-time save actions
+        };
       });
 
       // Also refresh followers data on manual refresh (if own channel)
       if (isOwnChannel && token) {
-        console.log('Manual refresh: Also fetching followers data');
         fetchFollowers();
       }
     } catch (error) {
@@ -395,23 +452,15 @@ export default function ChannelPage() {
 
   // Fetch activity feed for own channel
   useEffect(() => {
-    console.log('🔍 Activity feed useEffect - checking conditions:', { 
-      isOwnChannel, 
-      hasToken: !!token, 
-      username,
-      tokenPreview: token?.substring(0, 20) + '...',
-      currentUser: user?.username
-    });
-    
     if (!isOwnChannel || !token) {
-      console.log('🔍 Activity feed useEffect - skipping:', { isOwnChannel, hasToken: !!token });
       return;
     }
 
-    console.log('🔍 Activity feed useEffect - initial fetch for', username);
-
     // Initial fetch only (no auto-polling to reduce API load)
-    fetchActivityFeed();
+    // Delay to prevent simultaneous API calls
+    setTimeout(() => {
+      fetchActivityFeed();
+    }, 400);
   }, [isOwnChannel, fetchActivityFeed]);
 
   if (!channel) {
@@ -433,526 +482,728 @@ export default function ChannelPage() {
   }
 
   return (
-    <div className={`min-h-screen ${isDarkMode ? 'bg-black' : 'bg-gray-50'} p-6`}>
-      <header className="mb-6">
-        <Link 
-          to="/home" 
-          className={`inline-flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all hover:bg-opacity-80 ${
-            isDarkMode 
-              ? 'bg-gray-800 text-white hover:bg-gray-700' 
-              : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
-          }`}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          <span>Back to Browse</span>
-        </Link>
-        <div className="flex items-center mt-4">
-          <div className={`h-16 w-16 rounded-full mr-4 flex items-center justify-center text-xl font-bold ${
-            isDarkMode ? 'bg-gray-800 text-white' : 'bg-gray-300 text-gray-800'
-          }`}>
-            {channel.username.charAt(0).toUpperCase()}
-          </div>
-          <div>
-            <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              {channel.username}
-            </h1>
-            <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-              Followers: {channel.totalFollowers.toLocaleString()}
-            </p>
-          </div>
-        </div>
-      </header>
-
-      {/* Channel Information Section - Only show for own channel */}
-      {isOwnChannel && (
-        <div className={`p-6 rounded-lg shadow-md mb-6 ${
-          isDarkMode 
-            ? 'bg-gray-900 border border-gray-800' 
-            : 'bg-white'
-        }`}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-            Channel Information
-          </h2>
-          <button
-            type="button"
-            onClick={handleRefreshStatus}
-            disabled={refreshing}
-            className={`flex items-center gap-1 px-2 py-1 text-xs rounded-md transition-colors ${
-              isDarkMode
-                ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800'
-                : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
-            } ${refreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title="Refresh stream status"
+    <div className={`min-h-screen ${isDarkMode ? 'bg-black' : 'bg-gray-50'}`}>
+      <div className="max-w-6xl mx-auto py-8 px-4">
+        <header className="mb-6">
+          <Link 
+            to="/home" 
+            className={`inline-flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all hover:bg-opacity-80 ${
+              isDarkMode 
+                ? 'bg-gray-800 text-white hover:bg-gray-700' 
+                : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+            }`}
           >
-            <svg className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
-            {refreshing ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
+            <span>Back to Browse</span>
+          </Link>
+        </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* About Section */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className={`text-md font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                About
-              </h3>
-              {isOwnChannel && !isEditingAbout && (
+        {/* Only show tabs for own channel */}
+        {isOwnChannel && (
+          <>
+            <h2 className={`text-2xl font-bold mb-6 ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              My Channel
+            </h2>
+            
+            {/* Tab Navigation */}
+            <div className="flex justify-center mb-8">
+              <div className={`flex space-x-1 rounded-lg p-1 shadow-sm border ${
+                isDarkMode 
+                  ? 'bg-gray-900 border-gray-800' 
+                  : 'bg-white border-gray-200'
+              }`}>
                 <button
-                  onClick={() => setIsEditingAbout(true)}
-                  className={`text-xs px-2 py-1 rounded-md transition-colors ${
-                    isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
+                  onClick={() => setActiveTab('channel')}
+                  className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${
+                    activeTab === 'channel'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : `${isDarkMode 
+                          ? 'text-gray-300 hover:text-white hover:bg-gray-800' 
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                        }`
                   }`}
                 >
-                  Edit
+                  Channel Information
                 </button>
-              )}
-            </div>
-            
-            {isEditingAbout && isOwnChannel ? (
-              <div className="space-y-3">
-                <textarea
-                  value={aboutText}
-                  onChange={(e) => setAboutText(e.target.value)}
-                  placeholder="Tell viewers about your channel..."
-                  maxLength={500}
-                  rows={4}
-                  className={`w-full px-3 py-2 border rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                    isDarkMode
-                      ? 'bg-gray-800 border-gray-700 text-white placeholder-gray-400'
-                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                <button
+                  onClick={() => setActiveTab('monetization')}
+                  className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${
+                    activeTab === 'monetization'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : `${isDarkMode 
+                          ? 'text-gray-300 hover:text-white hover:bg-gray-800' 
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                        }`
                   }`}
-                />
-                <div className="flex items-center justify-between">
-                  <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                    {aboutText.length}/500 characters
-                  </span>
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={handleCancelAbout}
-                      disabled={savingAbout}
-                      className={`text-xs px-3 py-1 rounded-md transition-colors ${
-                        isDarkMode
-                          ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800'
-                          : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
-                      } ${savingAbout ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSaveAbout}
-                      disabled={savingAbout}
-                      className={`text-xs px-3 py-1 rounded-md transition-colors ${
-                        savingAbout
-                          ? 'opacity-50 cursor-not-allowed bg-blue-600 text-white'
-                          : 'bg-blue-600 text-white hover:bg-blue-700'
-                      }`}
-                    >
-                      {savingAbout ? 'Saving...' : 'Save'}
-                    </button>
-                  </div>
-                </div>
+                >
+                  Monetization
+                </button>
+                <button
+                  onClick={() => setActiveTab('analytics')}
+                  className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${
+                    activeTab === 'analytics'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : `${isDarkMode 
+                          ? 'text-gray-300 hover:text-white hover:bg-gray-800' 
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                        }`
+                  }`}
+                >
+                  Analytics
+                </button>
+                <button
+                  onClick={() => setActiveTab('moderation')}
+                  className={`px-6 py-2 rounded-md font-medium text-sm transition-all ${
+                    activeTab === 'moderation'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : `${isDarkMode 
+                          ? 'text-gray-300 hover:text-white hover:bg-gray-800' 
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                        }`
+                  }`}
+                >
+                  Moderation
+                </button>
               </div>
-            ) : (
-              <div className={`p-3 rounded-md border ${
-                isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'
-              }`}>
-                <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  {channel.bio || (isOwnChannel ? 'Click Edit to add a description of your channel.' : 'No description available.')}
-                </p>
-              </div>
-            )}
-          </div>
+            </div>
+          </>
+        )}
 
-          {/* Stream Title Section */}
-          {isOwnChannel && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <h3 className={`text-md font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  Stream Title
-                </h3>
-                {!isEditingTitle && (
-                  <button
-                    onClick={() => setIsEditingTitle(true)}
-                    className={`text-xs px-2 py-1 rounded-md transition-colors ${
-                      isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
-                    }`}
-                  >
-                    Edit
-                  </button>
-                )}
+        {/* Channel Information Tab */}
+        {isOwnChannel && activeTab === 'channel' && (
+          <>
+            {/* Channel Information Section */}
+            <div className={`p-6 rounded-lg shadow-md mb-6 ${
+              isDarkMode 
+                ? 'bg-gray-900 border border-gray-800' 
+                : 'bg-white'
+            }`}>
+              {/* Profile Section */}
+              <div className="flex items-center mb-6">
+                <Link to={`/${channel.username}`} className="block mr-4 hover:opacity-80 transition-opacity">
+                  <div className={`h-16 w-16 rounded-full flex items-center justify-center text-xl font-bold overflow-hidden ${
+                    isDarkMode ? 'bg-gray-800 text-white' : 'bg-gray-300 text-gray-800'
+                  }`}>
+                    {(freshProfilePicture || (isOwnChannel && user?.profilePicture)) ? (
+                      <img 
+                        src={freshProfilePicture || (isOwnChannel ? user?.profilePicture : undefined)} 
+                        alt={`${channel.username}'s profile`}
+                        className="w-16 h-16 rounded-full object-cover"
+                      />
+                    ) : (
+                      channel.username.charAt(0).toUpperCase()
+                    )}
+                  </div>
+                </Link>
+                <div className="flex-1">
+                  <Link to={`/${channel.username}`} className="block hover:opacity-80 transition-opacity">
+                    <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {channel.username}
+                    </h1>
+                  </Link>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRefreshStatus}
+                  disabled={refreshing}
+                  className={`flex items-center gap-1 px-2 py-1 text-xs rounded-md transition-colors ${
+                    isDarkMode
+                      ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800'
+                      : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
+                  } ${refreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Refresh stream status"
+                >
+                  <svg className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {refreshing ? 'Refreshing...' : 'Refresh'}
+                </button>
               </div>
               
-              {isEditingTitle ? (
-                <div className="space-y-3">
-                  <input
-                    type="text"
-                    value={streamTitle}
-                    onChange={(e) => setStreamTitle(e.target.value)}
-                    placeholder="Enter your stream title..."
-                    maxLength={100}
-                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      isDarkMode
-                        ? 'bg-gray-800 border-gray-700 text-white placeholder-gray-400'
-                        : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
-                    }`}
-                  />
-                  <div className="flex items-center justify-between">
-                    <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {streamTitle.length}/100 characters
-                    </span>
-                    <div className="flex space-x-2">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                  Channel Information
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* About Section */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className={`text-md font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      About
+                    </h3>
+                    {!isEditingAbout && (
                       <button
-                        onClick={handleCancelTitle}
-                        disabled={savingTitle}
-                        className={`text-xs px-3 py-1 rounded-md transition-colors ${
-                          isDarkMode
-                            ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800'
-                            : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
-                        } ${savingTitle ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveTitle}
-                        disabled={savingTitle}
-                        className={`text-xs px-3 py-1 rounded-md transition-colors ${
-                          savingTitle
-                            ? 'opacity-50 cursor-not-allowed bg-blue-600 text-white'
-                            : 'bg-blue-600 text-white hover:bg-blue-700'
+                        onClick={() => {
+                          setIsEditingAbout(true);
+                          setOriginalAboutText(aboutText);
+                        }}
+                        className={`text-xs px-2 py-1 rounded-md transition-colors ${
+                          isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
                         }`}
                       >
-                        {savingTitle ? 'Saving...' : 'Save'}
+                        Edit
                       </button>
-                    </div>
+                    )}
                   </div>
-                </div>
-              ) : (
-                <div className={`p-3 rounded-md border ${
-                  isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'
-                }`}>
-                  <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                    {streamTitle || 'Click Edit to set your stream title.'}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Stream Status Section */}
-          <div>
-            <div className="flex items-center space-x-4 mb-2">
-              <h3 className={`text-md font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                Stream Status
-              </h3>
-              {channel.live && (
-                <Link
-                  to={`/${channel.username}`}
-                  className={`flex items-center space-x-2 px-3 py-1 rounded-full w-fit transition-colors hover:opacity-80 ${
-                    isDarkMode ? 'bg-red-900' : 'bg-red-100'
-                  }`}
-                >
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                  <span className={`text-sm font-medium ${
-                    isDarkMode ? 'text-red-300' : 'text-red-700'
-                  }`}>LIVE</span>
-                  {channel.viewerCount !== undefined && (
-                    <span className={`text-xs ${
-                      isDarkMode ? 'text-red-300' : 'text-red-600'
-                    }`}>
-                      {channel.viewerCount} viewers
-                    </span>
-                  )}
-                  {channel.uptime && (
-                    <span className={`text-xs ${
-                      isDarkMode ? 'text-red-300' : 'text-red-600'
-                    }`}>• {channel.uptime}</span>
-                  )}
-                </Link>
-              )}
-            </div>
-
-            {channel.live ? (
-              <div className="space-y-3">
-                {channel.uptime && (
-                  <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                    Live for {channel.uptime}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <Link
-                  to={`/${channel.username}`}
-                  className={`flex items-center space-x-2 px-3 py-1 rounded-full w-fit transition-colors hover:opacity-80 ${
-                    isDarkMode ? 'bg-gray-700' : 'bg-gray-200'
-                  }`}
-                >
-                  <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
-                  <span className={`text-sm font-medium ${
-                    isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                  }`}>OFFLINE</span>
-                </Link>
-                <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                  This channel is not live currently.
-                </p>
-              </div>
-            )}
-
-            {/* Bitrate Monitor - Below stream status for own channel when live */}
-            {isOwnChannel && user && token && channel.live && (
-              <div className="mt-4">
-                <BitrateGraph 
-                  streamUsername={username}
-                  isLive={channel.live}
-                  className=""
-                  compact={true}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-      )}
-
-
-      {/* Audience Section - Only show for own channel */}
-      {isOwnChannel && (
-        <div className={`mt-6 p-6 rounded-lg shadow-md ${ 
-          isDarkMode 
-            ? 'bg-gray-900 border border-gray-800' 
-            : 'bg-white'
-        }`}>
-          <h2 className={`text-lg font-semibold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-            Audience
-          </h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Activity Feed Card */}
-            <div className={`rounded-lg border p-6 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-3">
-                  <svg className={`w-6 h-6 ${isDarkMode ? 'text-purple-400' : 'text-purple-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <h3 className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                    Activity Feed
-                  </h3>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={fetchActivityFeed}
-                    disabled={loadingActivities}
-                    className={`text-xs px-2 py-1 rounded-md transition-colors ${
-                      isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-200'
-                    } ${loadingActivities ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    title="Refresh activity feed"
-                  >
-                    <svg className={`w-3 h-3 ${loadingActivities ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                  </button>
-                  <div className={`w-2 h-2 rounded-full animate-pulse ${isDarkMode ? 'bg-purple-400' : 'bg-purple-500'}`}></div>
-                </div>
-              </div>
-              
-              <div className="mb-4">
-                <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  Live
-                </div>
-                <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                  Real-time activity
-                </p>
-              </div>
-
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {loadingActivities ? (
-                  <div className="flex items-center justify-center py-4">
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-purple-500"></div>
-                    <span className={`ml-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      Loading activity...
-                    </span>
-                  </div>
-                ) : activities.length > 0 ? (
-                  activities.map((activity) => (
-                    <div key={activity.id} className="flex items-center space-x-2 text-xs">
-                      <div className={`w-1 h-1 rounded-full ${
-                        activity.type === 'follow' || activity.type === 'unfollow'
-                          ? (isDarkMode ? 'bg-blue-400' : 'bg-blue-500')
-                          : (isDarkMode ? 'bg-green-400' : 'bg-green-500')
-                      }`}></div>
-                      <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
-                        <span className="font-medium">
-                          {activity.displayName || activity.username}
+                  
+                  {isEditingAbout ? (
+                    <div className="space-y-3">
+                      <textarea
+                        value={aboutText}
+                        onChange={(e) => setAboutText(e.target.value)}
+                        placeholder="Tell viewers about your channel..."
+                        maxLength={500}
+                        rows={4}
+                        className={`w-full px-3 py-2 border rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          isDarkMode
+                            ? 'bg-gray-800 border-gray-700 text-white placeholder-gray-400'
+                            : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                        }`}
+                      />
+                      <div className="flex items-center justify-between">
+                        <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                          {aboutText.length}/500 characters
                         </span>
-                        {activity.type === 'follow' && ' followed you'}
-                        {activity.type === 'unfollow' && ' unfollowed you'}
-                        {activity.type === 'subscribe' && ' subscribed'}
-                      </span>
-                      <span className={`ml-auto ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                        {formatActivityTime(activity.timestamp)}
-                      </span>
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={handleCancelAbout}
+                            disabled={savingAbout}
+                            className={`text-xs px-3 py-1 rounded-md transition-colors ${
+                              isDarkMode
+                                ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800'
+                                : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
+                            } ${savingAbout ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleSaveAbout}
+                            disabled={savingAbout}
+                            className={`text-xs px-3 py-1 rounded-md transition-colors ${
+                              savingAbout
+                                ? 'opacity-50 cursor-not-allowed bg-blue-600 text-white'
+                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                            }`}
+                          >
+                            {savingAbout ? 'Saving...' : 'Save'}
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  ))
-                ) : (
-                  <div className={`text-center py-8 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                    <p className="text-xs">No recent activity</p>
-                    <p className="text-xs mt-1">New follows and subscribes will appear here</p>
+                  ) : (
+                    <div className={`p-3 rounded-md border ${
+                      isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'
+                    }`}>
+                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {channel.bio || 'Click Edit to add a description of your channel.'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Stream Title Section */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className={`text-md font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      Stream Title
+                    </h3>
+                    {!isEditingTitle && (
+                      <button
+                        onClick={() => setIsEditingTitle(true)}
+                        className={`text-xs px-2 py-1 rounded-md transition-colors ${
+                          isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
+                        }`}
+                      >
+                        Edit
+                      </button>
+                    )}
                   </div>
-                )}
+                  
+                  {isEditingTitle ? (
+                    <div className="space-y-3">
+                      <input
+                        type="text"
+                        value={streamTitle}
+                        onChange={(e) => setStreamTitle(e.target.value)}
+                        placeholder="Enter your stream title..."
+                        maxLength={100}
+                        className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          isDarkMode
+                            ? 'bg-gray-800 border-gray-700 text-white placeholder-gray-400'
+                            : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                        }`}
+                      />
+                      <div className="flex items-center justify-between">
+                        <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                          {streamTitle.length}/100 characters
+                        </span>
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={handleCancelTitle}
+                            disabled={savingTitle}
+                            className={`text-xs px-3 py-1 rounded-md transition-colors ${
+                              isDarkMode
+                                ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-800'
+                                : 'text-gray-600 hover:text-gray-700 hover:bg-gray-100'
+                            } ${savingTitle ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleSaveTitle}
+                            disabled={savingTitle}
+                            className={`text-xs px-3 py-1 rounded-md transition-colors ${
+                              savingTitle
+                                ? 'opacity-50 cursor-not-allowed bg-blue-600 text-white'
+                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                            }`}
+                          >
+                            {savingTitle ? 'Saving...' : 'Save'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={`p-3 rounded-md border ${
+                      isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'
+                    }`}>
+                      <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {streamTitle || 'Click Edit to set your stream title.'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Stream Status Section */}
+                <div>
+                  <div className="flex items-center space-x-4 mb-2">
+                    <h3 className={`text-md font-medium ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      Stream Status
+                    </h3>
+                    {channel.live && (
+                      <Link
+                        to={`/${channel.username}`}
+                        className={`flex items-center space-x-2 px-3 py-1 rounded-full w-fit transition-colors hover:opacity-80 ${
+                          isDarkMode ? 'bg-red-900' : 'bg-red-100'
+                        }`}
+                      >
+                        <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                        <span className={`text-sm font-medium ${
+                          isDarkMode ? 'text-red-300' : 'text-red-700'
+                        }`}>LIVE</span>
+                        {channel.viewerCount !== undefined && (
+                          <span className={`text-xs ${
+                            isDarkMode ? 'text-red-300' : 'text-red-600'
+                          }`}>
+                            {channel.viewerCount} viewers
+                          </span>
+                        )}
+                        {channel.uptime && (
+                          <span className={`text-xs ${
+                            isDarkMode ? 'text-red-300' : 'text-red-600'
+                          }`}>• {channel.uptime}</span>
+                        )}
+                      </Link>
+                    )}
+                  </div>
+
+                  {channel.live ? (
+                    <div className="space-y-3">
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Link
+                        to={`/${channel.username}`}
+                        className={`flex items-center space-x-2 px-3 py-1 rounded-full w-fit transition-colors hover:opacity-80 ${
+                          isDarkMode ? 'bg-gray-700' : 'bg-gray-200'
+                        }`}
+                      >
+                        <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                        <span className={`text-sm font-medium ${
+                          isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                        }`}>OFFLINE</span>
+                      </Link>
+                      <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        This channel is not live currently.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Followers Card */}
-            <div className={`rounded-lg border p-6 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-3">
-                  <svg className={`w-6 h-6 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                  <h3 className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                    Followers
-                  </h3>
-                </div>
-                <button
-                  onClick={handleShowFollowers}
-                  className={`text-xs px-2 py-1 rounded-md transition-colors ${
-                    isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {showFollowers ? 'Hide' : 'Show'}
-                </button>
-              </div>
+            {/* Audience Section */}
+            <div className={`mt-6 p-6 rounded-lg shadow-md ${ 
+              isDarkMode 
+                ? 'bg-gray-900 border border-gray-800' 
+                : 'bg-white'
+            }`}>
+              <h2 className={`text-lg font-semibold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Audience
+              </h2>
               
-              <div className="mb-4">
-                <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {channel?.totalFollowers || 0}
-                </div>
-                <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                  Total followers
-                </p>
-              </div>
-
-              {showFollowers && (
-                <div>
-                  {loadingFollowers ? (
-                    <div className="flex items-center justify-center py-4">
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
-                      <span className={`ml-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                        Loading...
-                      </span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Activity Feed Card */}
+                <div className={`rounded-lg border p-6 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center space-x-3">
+                      <svg className={`w-6 h-6 ${isDarkMode ? 'text-purple-400' : 'text-purple-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      <h3 className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        Activity Feed
+                      </h3>
                     </div>
-                  ) : followers.length > 0 ? (
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {followers.slice(0, 5).map((follower) => (
-                        <div key={follower.id} className="flex items-center space-x-2">
-                          <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                            isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                          }`}>
-                            {follower.username.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-xs font-medium truncate ${
-                              isDarkMode ? 'text-white' : 'text-gray-900'
-                            }`}>
-                              {follower.displayName || follower.username}
-                            </p>
-                          </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={fetchActivityFeed}
+                        disabled={loadingActivities}
+                        className={`text-xs px-2 py-1 rounded-md transition-colors ${
+                          isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-200'
+                        } ${loadingActivities ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Refresh activity feed"
+                      >
+                        <svg className={`w-3 h-3 ${loadingActivities ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </button>
+                      <div className={`w-2 h-2 rounded-full animate-pulse ${isDarkMode ? 'bg-purple-400' : 'bg-purple-500'}`}></div>
+                    </div>
+                  </div>
+                  
+                  <div className="mb-4">
+                    <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      Live
+                    </div>
+                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      Real-time activity
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {loadingActivities ? (
+                      <div className="flex items-center justify-center py-4">
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-purple-500"></div>
+                        <span className={`ml-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                          Loading activity...
+                        </span>
+                      </div>
+                    ) : activities.length > 0 ? (
+                      activities.map((activity) => (
+                        <div key={activity.id} className="flex items-center space-x-2 text-xs">
+                          <div className={`w-1 h-1 rounded-full ${
+                            activity.type === 'follow' || activity.type === 'unfollow'
+                              ? (isDarkMode ? 'bg-blue-400' : 'bg-blue-500')
+                              : (isDarkMode ? 'bg-green-400' : 'bg-green-500')
+                          }`}></div>
+                          <span className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
+                            <span className="font-medium">
+                              {activity.displayName || activity.username}
+                            </span>
+                            {activity.type === 'follow' && ' followed you'}
+                            {activity.type === 'unfollow' && ' unfollowed you'}
+                            {activity.type === 'subscribe' && ' subscribed'}
+                          </span>
+                          <span className={`ml-auto ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                            {formatActivityTime(activity.timestamp)}
+                          </span>
                         </div>
-                      ))}
-                      {followers.length > 5 && (
-                        <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                          +{followers.length - 5} more
+                      ))
+                    ) : (
+                      <div className={`text-center py-8 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                        <p className="text-xs">No recent activity</p>
+                        <p className="text-xs mt-1">New follows and subscribes will appear here</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Followers Card */}
+                <div className={`rounded-lg border p-6 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center space-x-3">
+                      <svg className={`w-6 h-6 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                      <h3 className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        Followers
+                      </h3>
+                    </div>
+                    <button
+                      onClick={handleShowFollowers}
+                      className={`text-xs px-2 py-1 rounded-md transition-colors ${
+                        isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {showFollowers ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  
+                  <div className="mb-4">
+                    <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {channel?.totalFollowers || 0}
+                    </div>
+                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      Total followers
+                    </p>
+                  </div>
+
+                  {showFollowers && (
+                    <div>
+                      {loadingFollowers ? (
+                        <div className="flex items-center justify-center py-4">
+                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+                          <span className={`ml-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                            Loading...
+                          </span>
+                        </div>
+                      ) : followers.length > 0 ? (
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {followers.slice(0, 5).map((follower) => (
+                            <div key={follower.id} className="flex items-center space-x-2">
+                              <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                                isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
+                              }`}>
+                                {follower.username.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className={`text-xs font-medium truncate ${
+                                  isDarkMode ? 'text-white' : 'text-gray-900'
+                                }`}>
+                                  {follower.displayName || follower.username}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                          {followers.length > 5 && (
+                            <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                              +{followers.length - 5} more
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                          No followers yet
                         </p>
                       )}
                     </div>
-                  ) : (
-                    <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      No followers yet
-                    </p>
                   )}
                 </div>
-              )}
+
+                {/* Subscribers Card */}
+                <div className={`rounded-lg border p-6 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center space-x-3">
+                      <svg className={`w-6 h-6 ${isDarkMode ? 'text-green-400' : 'text-green-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <h3 className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        Subscribers
+                      </h3>
+                    </div>
+                    <button
+                      onClick={handleShowSubscribers}
+                      className={`text-xs px-2 py-1 rounded-md transition-colors ${
+                        isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {showSubscribers ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  
+                  <div className="mb-4">
+                    <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {subscribers.length}
+                    </div>
+                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      Total subscribers
+                    </p>
+                  </div>
+
+                  {showSubscribers && (
+                    <div>
+                      {loadingSubscribers ? (
+                        <div className="flex items-center justify-center py-4">
+                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-500"></div>
+                          <span className={`ml-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                            Loading...
+                          </span>
+                        </div>
+                      ) : subscribers.length > 0 ? (
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {subscribers.slice(0, 5).map((subscriber) => (
+                            <div key={subscriber.id} className="flex items-center space-x-2">
+                              <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                                isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
+                              }`}>
+                                {subscriber.username.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className={`text-xs font-medium truncate ${
+                                  isDarkMode ? 'text-white' : 'text-gray-900'
+                                }`}>
+                                  {subscriber.displayName || subscriber.username}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                          {subscribers.length > 5 && (
+                            <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                              +{subscribers.length - 5} more
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                          No subscribers yet
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
+          </>
+        )}
 
-            {/* Subscribers Card */}
-            <div className={`rounded-lg border p-6 ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-3">
-                  <svg className={`w-6 h-6 ${isDarkMode ? 'text-green-400' : 'text-green-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <h3 className={`font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                    Subscribers
-                  </h3>
-                </div>
-                <button
-                  onClick={handleShowSubscribers}
-                  className={`text-xs px-2 py-1 rounded-md transition-colors ${
-                    isDarkMode ? 'text-gray-400 hover:text-gray-300 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {showSubscribers ? 'Hide' : 'Show'}
-                </button>
-              </div>
-              
-              <div className="mb-4">
-                <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {subscribers.length}
-                </div>
-                <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                  Total subscribers
-                </p>
-              </div>
-
-              {showSubscribers && (
-                <div>
-                  {loadingSubscribers ? (
-                    <div className="flex items-center justify-center py-4">
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-500"></div>
-                      <span className={`ml-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                        Loading...
-                      </span>
-                    </div>
-                  ) : subscribers.length > 0 ? (
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {subscribers.slice(0, 5).map((subscriber) => (
-                        <div key={subscriber.id} className="flex items-center space-x-2">
-                          <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                            isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                          }`}>
-                            {subscriber.username.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-xs font-medium truncate ${
-                              isDarkMode ? 'text-white' : 'text-gray-900'
-                            }`}>
-                              {subscriber.displayName || subscriber.username}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                      {subscribers.length > 5 && (
-                        <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                          +{subscribers.length - 5} more
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      No subscribers yet
-                    </p>
-                  )}
-                </div>
-              )}
+        {/* Monetization Tab */}
+        {isOwnChannel && activeTab === 'monetization' && (
+          <div className={`p-6 rounded-lg shadow-md ${
+            isDarkMode 
+              ? 'bg-gray-900 border border-gray-800' 
+              : 'bg-white'
+          }`}>
+            <h3 className={`text-lg font-semibold mb-4 ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              Monetization
+            </h3>
+            
+            <div className="text-center py-12">
+              <svg className={`mx-auto h-12 w-12 mb-4 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <h4 className={`text-lg font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Monetization Coming Soon
+              </h4>
+              <p className={`${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                Ad management, revenue sharing, and payout settings will be available here.
+              </p>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Analytics Tab */}
+        {isOwnChannel && activeTab === 'analytics' && (
+          <div className={`p-6 rounded-lg shadow-md ${
+            isDarkMode 
+              ? 'bg-gray-900 border border-gray-800' 
+              : 'bg-white'
+          }`}>
+            <h3 className={`text-lg font-semibold mb-4 ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              Analytics
+            </h3>
+            
+            {user && token && (
+              <BitrateGraph 
+                streamUsername={username}
+                isLive={channel.live}
+                visible={activeTab === 'analytics'}
+                className="mb-6"
+                compact={false}
+              />
+            )}
+            
+            <div className="text-center py-12">
+              <svg className={`mx-auto h-12 w-12 mb-4 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              <h4 className={`text-lg font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                More Analytics Coming Soon
+              </h4>
+              <p className={`${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                Additional stream analytics, viewer stats, and performance metrics will be displayed here.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Moderation Tab */}
+        {isOwnChannel && activeTab === 'moderation' && (
+          <div className={`p-6 rounded-lg shadow-md ${
+            isDarkMode 
+              ? 'bg-gray-900 border border-gray-800' 
+              : 'bg-white'
+          }`}>
+            <h3 className={`text-lg font-semibold mb-4 ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              Moderation
+            </h3>
+            
+            <div className="text-center py-12">
+              <svg className={`mx-auto h-12 w-12 mb-4 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              <h4 className={`text-lg font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Moderation Tools
+              </h4>
+              <p className={`${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                Chat moderation, user bans, keyword filters, and moderator management will be available here.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* For non-own channels, show the original simplified view */}
+        {!isOwnChannel && (
+          <div className={`p-6 rounded-lg shadow-md ${
+            isDarkMode 
+              ? 'bg-gray-900 border border-gray-800' 
+              : 'bg-white'
+          }`}>
+            <div className="flex items-center mb-6">
+              <div className={`h-16 w-16 rounded-full flex items-center justify-center text-xl font-bold overflow-hidden mr-4 ${
+                isDarkMode ? 'bg-gray-800 text-white' : 'bg-gray-300 text-gray-800'
+              }`}>
+                {freshProfilePicture ? (
+                  <img 
+                    src={freshProfilePicture} 
+                    alt={`${channel.username}'s profile`}
+                    className="w-16 h-16 rounded-full object-cover"
+                  />
+                ) : (
+                  channel.username.charAt(0).toUpperCase()
+                )}
+              </div>
+              <div>
+                <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                  {channel.username}
+                </h1>
+                <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                  {channel.totalFollowers} followers
+                </p>
+              </div>
+            </div>
+            
+            <div className={`p-3 rounded-md border ${
+              isDarkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-gray-50'
+            }`}>
+              <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                {channel.bio}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import Input from '../../components/Input';
 import Button from '../../components/Button';
 import { Link } from 'react-router-dom';
 import { useDarkMode } from '../../contexts/DarkModeContext';
+import { requestPasswordReset } from '../../services/streamApi';
 
 type ResetRequestForm = {
   email: string;
@@ -11,14 +12,20 @@ type ResetRequestForm = {
 
 export default function ResetPassword() {
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { isDarkMode } = useDarkMode();
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<ResetRequestForm>();
 
   const onSubmit = async (data: ResetRequestForm) => {
-    // TODO: call your API to send a reset email
-    console.log('Requesting password reset for:', data.email);
-    await new Promise(r => setTimeout(r, 500)); // simulate network
-    setSent(true);
+    setError(null);
+    
+    try {
+      await requestPasswordReset(data.email);
+      setSent(true);
+    } catch (err) {
+      console.error('Password reset request failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to send reset email');
+    }
   };
 
   if (sent) {
@@ -74,6 +81,12 @@ export default function ResetPassword() {
           Enter your email below and we'll send you a link to reset your password.
         </p>
         <form onSubmit={handleSubmit(onSubmit)}>
+          {error && (
+            <div className="mb-4 p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md dark:bg-red-900/20 dark:border-red-800">
+              {error}
+            </div>
+          )}
+          
           <Input
             label="Email"
             type="email"
